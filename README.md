@@ -1,1 +1,1 @@
-This repository includes code for cleaning and analyzing data on legislative bills referencing CalEnviroScreen.
+This repository includes code for the data cleaning and legislative bill analyses associated with the in-progress manuscript "Employment of CalEnviroScreen in State Legislation: Characterizing the Uses of an Established Cumulative Impacts Screening Tool".
