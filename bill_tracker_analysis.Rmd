@@ -1,0 +1,1274 @@
+---
+title: "analysis_bill_tracker"
+author: "Laurel Denyer"
+date: "`r Sys.Date()`"
+output:
+  pdf_document: default
+  html_document: default
+---
+This file conducts descriptive analyses of the bills tracked from an output created in clean_bill_tracker.R. Run that file first to have the proper input for this .Rmd
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_chunk$set(warning = FALSE)
+knitr::opts_knit$set(root.dir = '/Users/laureldenyer/Documents/GitHub/thesis/ca-alternative-cesci') #Change your working directory as needed.
+```
+
+Libraries
+```{r message=FALSE, warning=FALSE}
+library(readr)
+library(tidyverse)
+library(dplyr)
+library(sf)
+library(ggplot2)
+library(knitr)
+library(DT)
+library(RColorBrewer)
+library(ggpubr)
+library(ggalluvial)
+library(gridExtra)
+library(gt)
+library(ggupset)
+library(UpSetR)
+library(ComplexUpset)
+library(showtext)
+library(webshot2)
+library(janitor)
+
+```
+
+
+Visual aesthetics
+```{r}
+
+custom_palette <- colorRampPalette(brewer.pal(9, "Set1"))(18)
+leg_fate_colors <- c("Enacted" = "#00BF7D", 
+                       "Dormant" = "#A3A500", 
+                       "Vetoed" = "#E76BF3", 
+                       "Failed" = "#00B0F6",
+                       "Died" = "#F8766D" )
+```
+
+# Data preparation of dummy variables. 
+```{r}
+bills_dv <- read.csv("data/interim/policy/combined_dv.csv")
+
+bills_dv = bills_dv[-c(1)]   
+
+#grouping the duplicate bills created for DVs. Only used for creating the dvs_only table and cleaning variable names
+grouped <- bills_dv %>% 
+  # Rename Status columns
+  rename_with(~str_replace(.,"^Status","Status_"), starts_with("Status")) %>%  
+  rename_with(~str_replace_all(., "(^Topiccat\\.|^Status\\.|\\.)", "_"), matches("^Topic_category_|^Status_")) %>% 
+  rename_with(~ str_replace_all(., "\\.", "_") %>% str_replace_all("_{2,}", "_")) %>%
+  
+  # Remove trailing underscores
+  rename_with(~str_replace(., "_$", "")) %>% 
+  
+  group_by(bill_id) %>% 
+  summarise(across(everything(), max, na.rm = TRUE))
+
+# Check column names
+colnames(grouped)
+
+#only dvs
+dvs_only <- grouped[,c(1,45:285)]
+head(dvs_only)
+
+#amended out only
+amend_free_dvs <- dvs_only %>% 
+  filter(Status_Amended_out_of_the_bill==0, na.rm=TRUE) 
+
+```
+
+#Pulling out the ones with amended out text. Note that the "quick" look sums up to 10, which means 16 are coded as only Amended out.
+```{r}
+amended_out_bills <- dvs_only %>% 
+  filter(Status_Amended_out_of_the_bill==1, na.rm=TRUE) %>% 
+  select(where(~any(.!=0)))
+print(amended_out_bills)
+
+amended_out_bills_quick<- dvs_only %>% 
+  dplyr::filter(Status_Amended_out_of_the_bill==1, na.rm=TRUE) %>% 
+  dplyr::summarize(
+    Enacted = sum(Status_Enacted, na.rm = TRUE),
+    Vetoed = sum(Status_Vetoed, na.rm = TRUE),
+    Failed = sum(Status_Failed, na.rm = TRUE),
+    Dormant = sum(Status_Filed, Status_Held_in_Committee, Status_Inactive_File, Status_Referred, Status_Returned_to_Secretary,Status_Suspended, Status_Introduced, na.rm=TRUE),
+    .groups = 'drop'
+  )
+print(amended_out_bills_quick)
+
+```
+
+
+### Descriptive statistics
+
+#Numbers of bills over time by legislative session and by fate of the bill
+```{r}
+legfate_over_time <- dvs_only %>%
+  filter(leg_session %in% c("2019-2020", "2021-2022", "2023-2024")) %>%
+  dplyr::group_by(leg_session) %>%
+  dplyr::summarize(
+    Amended_Out = sum(Status_Amended_out_of_the_bill, na.rm = TRUE),
+    Enacted = sum(Status_Enacted, na.rm = TRUE),
+    Vetoed = sum(Status_Vetoed, na.rm = TRUE),
+    Failed = sum(Status_Failed, na.rm = TRUE),
+    Died = sum(Status_Died, na.rm = TRUE),
+    Dormant = sum(Status_Filed, Status_Held_in_Committee, Status_Inactive_File, Status_Referred, Status_Returned, Status_Returned_to_Secretary,Status_Suspended, Status_Introduced, na.rm=TRUE),
+    .groups = 'drop'
+  )
+
+print(legfate_over_time)
+
+legfate_over_time_amend_out <- amended_out_bills %>% 
+  filter(leg_session %in% c("2019-2020", "2021-2022", "2023-2024")) %>%
+  dplyr::group_by(leg_session) %>%
+  dplyr::summarize(
+    Enacted = sum(Status_Enacted, na.rm = TRUE),
+    Vetoed = sum(Status_Vetoed, na.rm = TRUE),
+    Dormant = sum(Status_Filed, Status_Held_in_Committee, Status_Inactive_File, na.rm=TRUE),
+    .groups = 'drop'
+  )
+print(legfate_over_time_amend_out)
+
+```
+```{r}
+dvs_only %>% 
+  filter(Status_Amended_out_of_the_bill==1 & Status_Enacted==1) %>% nrow()
+dvs_only %>% 
+  filter(Status_Amended_out_of_the_bill==1 & Status_Failed==1) %>% nrow()
+dvs_only %>% 
+  filter(Status_Amended_out_of_the_bill==1 & Status_Filed==1) %>%  nrow()
+dvs_only %>% 
+  filter(Status_Amended_out_of_the_bill==1 & Status_Held_in_Committee==1) %>% nrow()
+dvs_only %>% 
+  filter(Status_Amended_out_of_the_bill==1 & Status_Inactive_File==1) %>% nrow()
+dvs_only %>% 
+  filter(Status_Amended_out_of_the_bill==1 & Status_Referred==1) %>%  nrow()
+dvs_only %>% 
+  filter(Status_Amended_out_of_the_bill==1 & Status_Returned_to_Secretary==1) %>%  nrow()
+dvs_only %>% 
+  filter(Status_Amended_out_of_the_bill==1 & Status_Returned==1) %>% nrow()
+dvs_only %>% 
+  filter(Status_Amended_out_of_the_bill==1 & Status_Suspended==1) %>%  nrow()
+dvs_only %>% 
+  filter(Status_Amended_out_of_the_bill==1 & Status_Vetoed==1) %>%  nrow()
+dvs_only %>% 
+  filter(Status_Amended_out_of_the_bill==1 & Status_Died==1) %>%  nrow()
+
+dvs_only %>%
+  filter(Status_Amended_out_of_the_bill == 1) %>%
+  group_by(leg_session) %>%
+  summarise(
+    Died_Count = sum(Status_Died ==1),
+    Enacted_Count = sum(Status_Enacted == 1),
+    Failed_Count = sum(Status_Failed == 1),
+    Filed_Count = sum(Status_Filed == 1),
+    Held_in_Committee_Count = sum(Status_Held_in_Committee == 1),
+    Inactive_File_Count = sum(Status_Inactive_File == 1),
+    Referred_Count = sum(Status_Referred == 1),
+    Returned_Count = sum(Status_Returned==1),
+    Returned_to_Secretary_Count = sum(Status_Returned_to_Secretary == 1),
+    Suspended_Count = sum(Status_Suspended == 1),
+    Vetoed_Count = sum(Status_Vetoed == 1)
+  )
+```
+
+
+
+Alluvial visual
+```{r pressure, echo=FALSE}
+legfate_long <- legfate_over_time %>%
+  pivot_longer(cols = c(#Amended_Out, 
+    Enacted, Vetoed, Failed, #Introduced, 
+    Dormant, Died),
+               names_to = "Status",
+               values_to = "Count")
+print(legfate_long)
+
+
+alluvial <- ggplot(legfate_long, aes(axis1 = leg_session, axis2 = Status, y = Count)) +
+  geom_alluvium(aes(fill = Status),alpha=0.4) +  # Adding the flow of statuses
+  geom_stratum(aes(fill = Status)) +  # The blocks representing each status
+  geom_text(stat = "stratum", aes(label = after_stat(stratum))) +  # Add labels inside the blocks
+  scale_x_discrete(limits = c("2019-2020", "2021-2022", "2023-2024"),
+                   expand = c(0.15, 0.15)) +
+  scale_y_continuous(expand = c(0.05, 0.05)) +
+  scale_fill_manual(values = custom_palette) +
+  theme_void() +
+  labs(title = "Legislative fates of bills",
+       x = "Legislative Session",
+       y = "Count of Bills",
+       fill = "Legislative Fate")
+
+
+#print(alluvial)
+n_legfate <- legfate_long %>% summarise(total = sum(Count, na.rm = TRUE)) %>%
+  pull(total)
+
+legfate_bar <- legfate_long %>%
+  filter(Count > 0) %>% 
+  ggplot(aes(x = leg_session, y = Count, fill = Status)) + # Removed alpha from here
+  geom_bar(stat = "identity", position = "stack", color = "black", alpha = 0.7) + # Added alpha globally here
+  geom_text(aes(label = Count), position = position_stack(vjust = 0.5), size = 4, color = "white") + 
+  scale_fill_manual(values = leg_fate_colors) + # Use scale_fill_manual for custom colors
+  theme_minimal() + 
+  labs(
+    title = paste("Legislative fates of bills, n =", n_legfate),
+    x = "Legislative Session",
+    y = "Count of Bills",
+    fill = "Legislative Fate"
+  ) +
+  theme_minimal()
+
+  
+print(legfate_bar)
+
+
+ggsave("output/figures/legfate.png", plot=legfate_bar, width=8, height=6, units="in", dpi=300)
+
+#ggsave("output/figures/alluvial.png", plot = alluvial, width = 8, height = 6, units = "in", dpi = 300)
+```
+
+
+
+#Summary of the ways that CalEnviroScreen and/or Health and Safety Code 39711 is used overall
+```{r}
+summary_uses <- dvs_only %>%
+  select(bill_id, contains("use")) %>% 
+  mutate(across(starts_with("I"), ~ifelse(. == 1, 1, 0))) %>%  
+  summarise(across(starts_with("I"), sum, na.rm = TRUE)) %>%  
+  pivot_longer(cols = starts_with("I"), names_to = "Use", values_to = "use_count1") %>% 
+  filter(use_count1 > 0) %>%  
+  mutate(Use = gsub("^I[0-9]+_use", "", Use), 
+         Use = gsub("_", " ", Use)) %>% 
+  group_by(Use) %>% 
+  summarise(use_count1 = sum(use_count1), .groups = 'drop') %>% 
+  arrange(desc(use_count1))  
+print(summary_uses)
+
+summary_uses_amend_free <- amend_free_dvs %>%
+  select(bill_id, contains("use")) %>% 
+  mutate(across(starts_with("I"), ~ifelse(. == 1, 1, 0))) %>%  
+  summarise(across(starts_with("I"), sum, na.rm = TRUE)) %>%  
+  pivot_longer(cols = starts_with("I"), names_to = "Use", values_to = "use_count2") %>% 
+  filter(use_count2 > 0) %>%  
+  mutate(Use = gsub("^I[0-9]+_use", "", Use), 
+         Use = gsub("_", " ", Use)) %>% 
+  group_by(Use) %>% 
+  summarise(use_count2 = sum(use_count2), .groups = 'drop') %>% 
+  arrange(desc(use_count2))  
+print(summary_uses_amend_free)
+
+merged_summary_uses <- merge(summary_uses, summary_uses_amend_free, by="Use")
+merged_summary_uses$Amended_out <- merged_summary_uses$use_count1 - merged_summary_uses$use_count2
+merged_summary_uses <- merged_summary_uses %>% arrange(desc(Amended_out))
+print(merged_summary_uses)
+```
+This shows the amended out ones and how they use it, and it follows a similar pattern in that its the most common uses
+
+#Uses by status
+```{r}
+uses_by_status <- dvs_only %>%
+ select(bill_id, leg_session, contains("use"), starts_with("Status_")) %>% 
+  mutate(across(starts_with("I"), ~ ifelse(. == 1, 1, 0))) %>%
+  pivot_longer(cols = starts_with("I") & contains("use"), names_to = "Use", values_to = "use_count") %>%
+  filter(use_count == 1) %>%
+  mutate(Use = gsub("^I[0-9]+_use", "", Use),
+         Use = gsub("_", " ", Use)) %>%
+  pivot_longer(cols = starts_with("Status_"), names_to = "Status", values_to = "status_value") %>%
+  filter(!is.na("Status")) %>%
+  filter(status_value == 1) %>%
+  mutate(Status = case_when(
+     Status %in% c("Status_Enacted") ~ "Enacted",
+    Status %in% c("Status_Vetoed") ~ "Vetoed",
+    Status %in% c("Status_Failed") ~ "Failed",
+    Status %in% c("Status_Died") ~ "Died",
+    Status %in% c("Status_Filed", "Status_Held_in_Committee", "Status_Inactive_File", "Status_Referred", "Status_Introduced", "Status_Returned_to_Secretary", "Status_Suspended") ~ "Dormant",
+  )) %>%
+  group_by(leg_session, Use, Status) %>%
+  summarise(use_count = n(), .groups = 'drop') %>%
+  arrange(leg_session, Use, desc(use_count))
+
+print(uses_by_status)
+
+uses_by_status_amend_free <- amend_free_dvs %>%
+ select(bill_id, leg_session, contains("use"), starts_with("Status_")) %>% 
+  mutate(across(starts_with("I"), ~ ifelse(. == 1, 1, 0))) %>%
+  pivot_longer(cols = starts_with("I") & contains("use"), names_to = "Use", values_to = "use_count") %>%
+  filter(use_count == 1) %>%
+  mutate(Use = gsub("^I[0-9]+_use", "", Use),
+         Use = gsub("_", " ", Use)) %>%
+  pivot_longer(cols = starts_with("Status_"), names_to = "Status", values_to = "status_value") %>%
+  filter(status_value == 1) %>%
+  mutate(Status = case_when(
+    Status %in% c("Status_Enacted") ~ "Enacted",
+    Status %in% c("Status_Vetoed") ~ "Vetoed",
+    Status %in% c("Status_Failed") ~ "Failed",
+    Status %in% c("Status_Died") ~ "Died",
+    Status %in% c("Status_Filed", "Status_Held_in_Committee", "Status_Inactive_File", "Status_Referred", "Status_Introduced", "Status_Returned_to_Secretary", "Status_Suspended") ~ "Dormant",
+  )) %>%
+  group_by(leg_session, Use, Status) %>%
+  summarise(use_count = n(), .groups = 'drop') %>%
+  arrange(leg_session, Use, desc(use_count))
+
+print(uses_by_status_amend_free)
+
+#THIS IS NOT WORKING - just going to handle manually 
+uses_by_status_amend_out <- amended_out_bills %>%
+  select(bill_id, leg_session, contains("use"), starts_with("Status_")) %>% 
+  mutate(across(starts_with("I"), ~ ifelse(. == 1, 1, 0))) %>%
+   mutate(across(starts_with("Status_"), ~ replace_na(., 0))) %>%
+  pivot_longer(cols = starts_with("I") & contains("use"), names_to = "Use", values_to = "use_count") %>%
+  filter(use_count == 1) %>%
+  mutate(Use = gsub("^I[0-9]+_use", "", Use),
+         Use = gsub("_", " ", Use)) %>%
+  pivot_longer(cols = starts_with("Status_"), names_to = "Status", values_to = "status_value") %>%
+  filter(status_value == 1) %>%
+  mutate(Status = case_when(
+    Status %in% c("Status_Enacted", "Status_Vetoed", "Status_Failed", "Status_Introduced", "Status_Died") ~ Status,
+    Status %in% c("Status_Filed", "Status_Held_in_Committee", "Status_Inactive_File", "Status_Referred", "Status_Returned_to_Secretary", "Status_Suspended") ~ "Dormant",
+  )) %>%
+  group_by(leg_session, Use, Status) %>%
+  summarise(use_count = n(), .groups = 'drop') %>%
+  arrange(leg_session, Use, desc(use_count))
+print(uses_by_status_amend_out)
+
+```
+
+
+More visualizations of use by status
+```{r, echo=FALSE}
+uses_by_status_plot <- ggplot(uses_by_status, aes(x = Use, y = use_count, fill = Status)) +
+  geom_bar(stat = "identity", position = "dodge") +
+  labs(
+    title = "Use by Status Count",
+    x = "Use Type",
+    y = "Status Count",
+    fill = "Status"
+  ) +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+ggsave("output/figures/uses_by_status_plot.png", plot = uses_by_status_plot, width = 8, height = 6, units = "in", dpi = 300)
+
+table_uses_by_status <- uses_by_status %>%
+  group_by(Use, Status) %>%
+  summarise(use_count = sum(use_count), .groups = 'drop') %>%
+  arrange(Use, Status)
+
+uses_point_plot <- ggplot(table_uses_by_status, aes(x = Use, y = Status, fill = use_count, color = use_count)) +
+  geom_point(aes(size = use_count), shape = 21) +
+  scale_fill_gradient(low = "lightblue", high = "darkblue") + 
+  scale_color_gradient(low = "lightblue", high = "darkblue") +
+  theme_void() +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    axis.text.y = element_text(size = 8),
+    axis.title = element_blank(),
+    panel.grid = element_blank()
+  ) 
+
+ggsave("output/figures/uses_point_plot.png", plot = uses_point_plot, width = 8, height = 6, units = "in", dpi = 300)
+
+table_uses_by_status_nested <- table_uses_by_status %>%
+  group_by(Use) %>%
+  pivot_wider(names_from = Status, values_from = use_count, values_fill = list(use_count = 0)) %>%
+  ungroup()
+
+table_uses_by_status_nested_transposed <- table_uses_by_status_nested %>%
+  pivot_longer(
+    cols = -Use,
+    names_to = "Status",
+    values_to = "use_count"
+  ) %>%
+  pivot_wider(
+    id_cols = Status,
+    names_from = Use,
+    values_from = use_count,
+    values_fill = list(use_count = 0)
+  )
+
+table_uses_by_status_nested_transposed <- table_uses_by_status_nested_transposed %>% 
+  mutate(Total = rowSums(.[, sapply(., is.numeric)]))
+
+use_status_totals_row <- data.frame(
+  Employ_Type = "Total",
+  `Advisory role` = sum(table_uses_by_status_nested_transposed$`Advisory role`, na.rm = TRUE),
+  `Community engagement` = sum(table_uses_by_status_nested_transposed$`Community engagement`, na.rm = TRUE),
+  `Defining a community` = sum(table_uses_by_status_nested_transposed$`Defining a community`, na.rm = TRUE),
+  `Funding prioritization` = sum(table_uses_by_status_nested_transposed$`Funding prioritization`, na.rm = TRUE),
+  `Mitigation` = sum(table_uses_by_status_nested_transposed$`Mitigation`, na.rm = TRUE),
+  `Program eligibility` = sum(table_uses_by_status_nested_transposed$`Program eligibility`, na.rm = TRUE),
+  `Program goals` = sum(table_uses_by_status_nested_transposed$`Program goals`, na.rm = TRUE),
+  `Program prioritization` = sum(table_uses_by_status_nested_transposed$`Program prioritization`, na.rm = TRUE),
+  `Requires CES to be used in analysis` = sum(table_uses_by_status_nested_transposed$`Requires CES to be used in analysis`, na.rm = TRUE),
+  `Used as data in support of writing the bill` = sum(table_uses_by_status_nested_transposed$`Used as data in support of writing the bill`, na.rm = TRUE),  
+  Total = sum(table_uses_by_status_nested_transposed$Total, na.rm = TRUE)
+)
+
+table_use_status_with_totals <- table_uses_by_status_nested_transposed %>%
+  adorn_totals(where = "row")
+
+gt_table_status <- table_use_status_with_totals %>%
+  filter(Status != "NA") %>%
+  gt() %>%
+  tab_options(table.width = pct(100)) %>%
+  tab_header(
+    title = "Use Count by Legislative Status"
+  )
+
+print(gt_table_status)
+
+gtsave(gt_table_status, "output/figures/use_status_comparison_table.png")
+
+```
+
+Same visuals as above but without the amended out bills
+```{r, echo=FALSE}
+ggplot(uses_by_status_amend_free, aes(x = Use, y = use_count, fill = Status)) +
+  geom_bar(stat = "identity", position = "dodge") +
+  labs(
+    title = "Use by Status Count - amended free",
+    x = "Use Type",
+    y = "Status Count",
+    fill = "Status"
+  ) +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+table_uses_by_status_amend_free <- uses_by_status_amend_free %>%
+  group_by(Use, Status) %>%
+  summarise(use_count = sum(use_count), .groups = 'drop') %>%
+  arrange(Use, Status)
+
+ggplot(table_uses_by_status_amend_free, aes(x = Use, y = Status, fill = use_count, color = use_count)) +
+  geom_point(aes(size = use_count), shape = 21) +
+  scale_fill_gradient(low = "lightblue", high = "darkblue") + 
+  scale_color_gradient(low = "lightblue", high = "darkblue") +
+  theme_void() +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    axis.text.y = element_text(size = 8),
+    axis.title = element_blank(),
+    panel.grid = element_blank()
+  ) 
+
+table_uses_by_status_amend_free_nested <- table_uses_by_status_amend_free %>%
+  group_by(Use) %>%
+  pivot_wider(names_from = Status, values_from = use_count, values_fill = list(use_count = 0)) %>%
+  ungroup()
+
+table_uses_by_status_amend_free_nested %>%
+  gt() %>%
+  tab_header(
+    title = "Use Count by Status - amended free"
+  )
+```
+
+```{r}
+upset_uses_by_status <- dvs_only %>%
+ select(bill_id, leg_session, contains("use"), starts_with("Status_")) %>% 
+  mutate(across(starts_with("I"), ~ ifelse(. == 1, 1, 0))) %>%
+  pivot_longer(cols = starts_with("I") & contains("use"), names_to = "Use", values_to = "use_count") %>%
+  filter(use_count == 1) %>%
+  mutate(Use = gsub("^I[0-9]+_use", "", Use),
+         Use = gsub("_", " ", Use)) %>%
+  pivot_longer(cols = starts_with("Status_"), names_to = "Status", values_to = "status_value") %>%
+  filter(!is.na("Status")) %>%
+  filter(status_value == 1) %>%
+  mutate(Status = case_when(
+    Status %in% c("Status_Enacted") ~ "Enacted",
+    Status %in% c("Status_Vetoed") ~ "Vetoed",
+    Status %in% c("Status_Failed") ~ "Failed",
+    Status %in% c("Status_Died") ~ "Died",
+    Status %in% c("Status_Filed", "Status_Held_in_Committee", "Status_Inactive_File", "Status_Referred", "Status_Introduced", "Status_Returned_to_Secretary", "Status_Suspended") ~ "Dormant",
+  )) %>%
+  group_by(leg_session, Use, Status) 
+
+print(upset_uses_by_status)
+
+upset_uses_by_status <- upset_uses_by_status %>% select(-c(Topic_category_Land_use))
+
+# Pivot wider
+wide_data <- upset_uses_by_status %>%
+  mutate(use_count = as.numeric(use_count)) %>%  # Ensure numeric type
+  pivot_wider(
+names_from = Use,
+ values_from = use_count,
+ values_fill = list(use_count = 0),
+ values_fn = list(use_count = sum)  # Handle duplicates
+)
+wide_data_clean <- na.omit(wide_data)
+
+
+uses=colnames(wide_data)[5:15]
+
+upset_stack <- upset( 
+    wide_data_clean,
+    uses, name='Use', width_ratio = 0.3, set_sizes=FALSE, min_size = 2, 
+    base_annotations=list(
+        'Intersection size'=intersection_size(
+            counts=FALSE,
+            show_numbers = FALSE,
+            mapping=aes(fill=Status))
+    )
+)+ 
+  ggtitle("Intensity of uses within bills, n = 216 bills, 566 instances") +
+  scale_fill_manual(values=leg_fate_colors) +
+  theme(
+    plot.title = element_text(
+      hjust = 0.5,   # center the title
+      vjust = 2      # move the title higher above the plot
+    )
+  )
+print(upset_stack)
+
+upset_simple <- upset(wide_data_clean, uses, name='Use', width_ratio = 0.3, set_sizes=FALSE, min_size = 2, 
+      base_annotations = list(
+        'Intersection size' = intersection_size(
+            counts = FALSE,  
+            show_numbers = FALSE
+        )))
+
+print(upset_simple)
+
+ggsave("output/figures/upset_stack.png", plot=upset_stack, width=8, height=6, units="in", dpi=300)
+
+ggsave("output/figures/upset.png", plot=upset_simple, width=8, height=6, units="in", dpi=300)
+
+
+```
+
+
+```{r, echo=FALSE}
+ggplot(uses_by_status, aes(x = Status, y = use_count, fill = Use)) +
+  geom_bar(stat = "identity", position = "dodge") +
+  labs(
+    title = "Use Count by Status",
+    x = "Status",
+    y = "Use Count",
+    fill = "Use Type"
+  ) +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+
+ggplot(uses_by_status_amend_free, aes(x = Status, y = use_count, fill = Use)) +
+  geom_bar(stat = "identity", position = "dodge") +
+  labs(
+    title = "Use Count by Status - amended free",
+    x = "Status",
+    y = "Use Count",
+    fill = "Use Type"
+  ) +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+
+```
+Parse out the bills with multi domain assignments
+```{r}
+multi_domain <- bills_dv %>% 
+  group_by(bill_id) %>%
+  filter(n_distinct(Topic.category) > 1)
+
+unique(multi_domain$bill_id)
+n_distinct(multi_domain$bill_id)
+
+```
+
+
+#Topics of bills
+```{r}
+topics <- dvs_only %>%
+  select(bill_id, starts_with("Topic_category_")) %>%
+  gather(key="Topic_category",value="value",-bill_id) %>% 
+  filter(value==1) %>% 
+  mutate(Topic = case_when(
+    grepl("^Topic_category_Transportation", Topic_category) ~ "Transportation",
+    grepl("^Topic_category_Governance", Topic_category) ~ "Governance",
+    grepl("Topic_category_Water", Topic_category, ignore.case = TRUE) ~ "Non-drinking Water",
+    grepl("Topic_category_Energy|Topic_category_Electricity", Topic_category, ignore.case = TRUE) ~ "Energy",
+    grepl("Topic_categorysea_level_rise|Topic_category_Climate_emergency_natural_hazards", Topic_category, ignore.case = TRUE) ~ "Climate emergency/natural hazards",
+    grepl("Topic_category_Waste",Topic_category,ignore.case=TRUE)~"Waste",
+    TRUE ~ gsub("_"," ", gsub("^Topic_category_","",Topic_category))
+  )) %>%
+  group_by(Topic) %>%
+  summarise(bill_count = n(), .groups = 'drop') %>% 
+  arrange(desc(bill_count)) 
+print(topics)
+
+topics_amend_free <- amend_free_dvs %>%
+  select(bill_id, starts_with("Topic_category_")) %>%
+  gather(key="Topic_category",value="value",-bill_id) %>% 
+  filter(value==1) %>% 
+  mutate(Topic = case_when(
+    grepl("^Topic_category_Transportation", Topic_category) ~ "Transportation",
+    grepl("^Topic_category_Governance", Topic_category) ~ "Governance",
+    grepl("Topic_category__Water", Topic_category, ignore.case = TRUE) ~ "Non-drinking Water",
+    grepl("Topic_category_Energy|Topic_category_Electricity", Topic_category, ignore.case = TRUE) ~ "Energy",
+    grepl("Topic_category_sea_level_rise|Topic_category_Climate_emergency_natural_hazards", Topic_category, ignore.case = TRUE) ~ "Climate emergency/natural hazards",
+    grepl("Topic_category_Waste",Topic_category,ignore.case=TRUE)~"Waste",
+    TRUE ~ gsub("_"," ", gsub("^Topic_category_","",Topic_category))
+  )) %>%
+  group_by(Topic) %>%
+  summarise(bill_count = n(), .groups = 'drop') %>% 
+  arrange(desc(bill_count)) 
+print(topics_amend_free)
+
+topics_amend_out <- amended_out_bills %>%
+  select(bill_id, starts_with("Topic_category_")) %>%
+  gather(key="Topic_category",value="value",-bill_id) %>% 
+  filter(value==1) %>% 
+  mutate(Topic = case_when(
+    grepl("^Topic_category_Transportation", Topic_category) ~ "Transportation",
+    grepl("^Topic_category_Governance", Topic_category) ~ "Governance",
+    grepl("Topic_category_Water", Topic_category, ignore.case = TRUE) ~ "Non-drinking Water",
+    grepl("Topic_category_Energy|Topic_category_Electricity", Topic_category, ignore.case = TRUE) ~ "Energy",
+    grepl("Topic_category_sea_level_rise|Topic_category_Climate_emergency_natural_hazards", Topic_category, ignore.case = TRUE) ~ "Climate emergency/natural hazards",
+    grepl("Topic_category_Waste",Topic_category,ignore.case=TRUE)~"Waste",
+    TRUE ~ gsub("_"," ", gsub("^Topic_category_","",Topic_category))
+  )) %>%
+  group_by(Topic) %>%
+  summarise(bill_count = n(), .groups = 'drop') %>% 
+  arrange(desc(bill_count)) 
+print(topics_amend_out)
+```
+
+#Removing budget bills
+```{r}
+
+dvs_titled <- dvs_only %>%
+  left_join(grouped %>% select(bill_id, Topic_Title), by = "bill_id")
+
+dvs_titled_amend_free <- amend_free_dvs %>%
+  left_join(grouped %>% select(bill_id, Topic_Title), by = "bill_id")
+
+dvs_titled_amend_out <- amended_out_bills %>%
+  left_join(grouped %>% select(bill_id, Topic_Title), by = "bill_id")
+
+topics_without_budget <- dvs_titled %>%
+  select(bill_id, starts_with("Topic_category_"),Topic_Title) %>%
+  gather(key = "Topic_category", value = "value", -bill_id,-Topic_Title) %>%
+  filter(value == 1) %>%
+  mutate(Topic = case_when(
+    grepl("^Topic_category_Transportation", Topic_category) ~ "Transportation",
+    grepl("^Topic_category_Governance", Topic_category) ~ "Governance",
+    grepl("Topic_category_Water", Topic_category, ignore.case = TRUE) ~ "Non-drinking Water",
+    grepl("Topic_category_Energy|Topic_category_Electricity", Topic_category, ignore.case = TRUE) ~ "Energy",
+    grepl("Topic_category_sea_level_rise|Topic_category_Climate_emergency_natural_hazards", Topic_category, ignore.case = TRUE) ~ "Climate emergency/natural hazards",
+    grepl("Topic_category_Waste", Topic_category, ignore.case = TRUE) ~ "Waste",
+    TRUE ~ gsub("_", " ", gsub("^Topic_category_", "", Topic_category))
+  )) %>%
+  filter(!grepl("Budget Act", Topic_Title, ignore.case = TRUE)) %>%  
+  group_by(Topic) %>%
+  summarise(bill_count = n(), .groups = 'drop') %>%
+  arrange(desc(bill_count))
+
+print(topics_without_budget)
+
+topics_without_budget_amend_free <- dvs_titled_amend_free %>%
+  select(bill_id, starts_with("Topic_category_"),Topic_Title) %>%
+  gather(key = "Topic_category", value = "value", -bill_id,-Topic_Title) %>%
+  filter(value == 1) %>%
+  mutate(Topic = case_when(
+    grepl("^Topic_category_Transportation", Topic_category) ~ "Transportation",
+    grepl("^Topic_category_Governance", Topic_category) ~ "Governance",
+    grepl("Topic_category_Water", Topic_category, ignore.case = TRUE) ~ "Non-drinking Water",
+    grepl("Topic_category_Energy|Topic_category_Electricity", Topic_category, ignore.case = TRUE) ~ "Energy",
+    grepl("Topic_category_sea_level_rise|Topic_category_Climate_emergency_natural_hazards", Topic_category, ignore.case = TRUE) ~ "Climate emergency/natural hazards",
+    grepl("Topic_category_Waste", Topic_category, ignore.case = TRUE) ~ "Waste",
+    TRUE ~ gsub("_", " ", gsub("^Topic_category_", "", Topic_category))
+  )) %>%
+  filter(!grepl("Budget Act", Topic_Title, ignore.case = TRUE)) %>%  
+  group_by(Topic) %>%
+  summarise(bill_count = n(), .groups = 'drop') %>%
+  arrange(desc(bill_count))
+
+print(topics_without_budget_amend_free)
+
+topics_without_budget_amend_out <- dvs_titled_amend_out %>%
+  select(bill_id, starts_with("Topic_category_"),Topic_Title) %>%
+  gather(key = "Topic_category", value = "value", -bill_id,-Topic_Title) %>%
+  filter(value == 1) %>%
+  mutate(Topic = case_when(
+    grepl("^Topic_category_Transportation", Topic_category) ~ "Transportation",
+    grepl("^Topic_category_Governance", Topic_category) ~ "Governance",
+    grepl("Topic_category_Water", Topic_category, ignore.case = TRUE) ~ "Non-drinking Water",
+    grepl("Topic_category_Energy|Topic_category_Electricity", Topic_category, ignore.case = TRUE) ~ "Energy",
+    grepl("Topic_category_sea_level_rise|Topic_category_Climate_emergency_natural_hazards", Topic_category, ignore.case = TRUE) ~ "Climate emergency/natural hazards",
+    grepl("Topic_category_Waste", Topic_category, ignore.case = TRUE) ~ "Waste",
+    TRUE ~ gsub("_", " ", gsub("^Topic_category_", "", Topic_category))
+  )) %>%
+  filter(!grepl("Budget Act", Topic_Title, ignore.case = TRUE)) %>%  
+  group_by(Topic) %>%
+  summarise(bill_count = n(), .groups = 'drop') %>%
+  arrange(desc(bill_count))
+
+print(topics_without_budget_amend_out)
+```
+
+#Topics by session without budget bills
+```{r, echo=FALSE}
+topics_by_session <- dvs_titled %>%
+  select(bill_id, starts_with("Topic_category_"), Topic_Title, leg_session) %>% 
+  filter(leg_session%in% c("2019-2020","2021-2022","2023-2024")) %>% 
+  gather(key = "Topic_category", value = "value", -bill_id, -Topic_Title, -leg_session) %>% 
+  filter(value == 1) %>%
+  mutate(Topic = case_when(
+    grepl("^Topic_category_Transportation|^Topic_category_Ports", Topic_category) ~ "Transportation",
+    grepl("^Topic_category_Governance", Topic_category) ~ "Governance",#combines governance types
+    grepl("Topic_category_Energy|Topic_category_Electricity", Topic_category, ignore.case = TRUE) ~ "Energy",
+    grepl("Topic_category_sea_level_rise|Topic_category_Climate_emergency_natural_hazards|Topic_category_Carbon_emissions", Topic_category, ignore.case = TRUE) ~ "Climate",
+    grepl("Topic_category_Housing|Topic_category_Greening|Topic_category_Land_use|Topic_category_Planning", Topic_category, ignore.case=TRUE) ~ "Planning",
+    grepl("Topic_category_Air_pollution_quality_nonvehicular|Topic_category_Groundwater|Topic_category_Marine|Topic_category_Water", Topic_category, ignore.case=TRUE) ~ "Environmental conditions",
+    grepl("Topic_category_Oil_gas", Topic_category, ignore.case = TRUE) & bill_id %in% c("95", "146") ~ "Planning",
+    grepl("Topic_category_Oil_gas", Topic_category, ignore.case = TRUE) & bill_id %in% c("162") ~ "Environmental conditions",
+    grepl("Topic_category_Oil_gas", Topic_category, ignore.case = TRUE) & bill_id %in% c("168") ~ "Energy",
+    grepl("Topic_category_Community_development_grants|Topic_category_Education_and_workforce", Topic_category, ignore.case=TRUE) ~ "Community development",
+    grepl("Topic_category_Waste", Topic_category, ignore.case = TRUE) ~ "Waste", #combines waste types
+    TRUE ~ gsub("_", " ", gsub("^Topic_category_", "", Topic_category))  
+  )) %>%
+  filter(!grepl("Budget Act", Topic_Title, ignore.case = TRUE)) %>%  
+  group_by(leg_session, Topic) %>%  
+  summarise(bill_count = n(), .groups = 'drop') %>%
+  pivot_wider(names_from=leg_session, values_from=bill_count, values_fill = 0)
+print(topics_by_session)
+
+topics_by_session_long <-topics_by_session %>% 
+  pivot_longer(cols=c("2019-2020", "2021-2022", "2023-2024"),
+               names_to="leg_session",
+               values_to="bill_count")
+n_topics <- topics_by_session_long %>% summarise(total = sum(bill_count, na.rm = TRUE)) %>%
+  pull(total)
+
+bar_bills_topics_time <- ggplot(topics_by_session_long, aes(x = Topic, y = bill_count, fill = Topic)) +
+  geom_bar(stat = "identity", position = "dodge") + 
+  facet_wrap(~ leg_session) + 
+  labs(
+    title = paste("Bill Count by Domain Across Legislative Sessions, n =", n_topics),
+    x = NULL,
+    y = "Number of bills in each domain",
+    fill = "Domain"
+  ) +
+  theme_minimal() +
+  theme(
+    axis.text.x = element_blank(), 
+    axis.title.x = element_blank() 
+  )
+
+print(bar_bills_topics_time)
+ggsave("output/figures/bar_bills_topics_time.png", plot = bar_bills_topics_time, width = 8, height = 6, units = "in", dpi = 300)
+```
+
+
+## Adding and amending of codes
+# Action type (added or amended to code) by bill
+```{r, echo=FALSE}
+action_summary <- dvs_only %>%
+  summarize(
+    Added = sum(across(starts_with("added")), na.rm = TRUE),
+    Amended = sum(across(starts_with("amend")), na.rm = TRUE),
+    .groups = 'drop'
+  )
+summary(action_summary)
+action_summary %>% 
+  #filter(Added>0) %>% 
+  ggplot(aes(x = Added)) +
+  geom_histogram() +
+  geom_text(stat = "count", aes(label = after_stat(count)), vjust = -1)
+action_summary %>% 
+  #filter(Added>0) %>% 
+  ggplot(aes(x = Amended)) +
+  geom_histogram() +
+  geom_text(stat = "count", aes(label = after_stat(count)), vjust = -1)
+
+
+action_summary_amend_free <- amend_free_dvs %>%
+  summarize(
+    Added = sum(across(starts_with("added")), na.rm = TRUE),
+    Amended = sum(across(starts_with("amend")), na.rm = TRUE),
+    .groups = 'drop'
+  )
+action_summary_amend_out <- amended_out_bills %>%
+  summarize(
+    Added = sum(across(starts_with("added")), na.rm = TRUE),
+    Amended = sum(across(starts_with("amend")), na.rm = TRUE),
+    .groups = 'drop'
+  )
+
+#group by bill id, is it just adding or amending happening or a mix
+action_summary <- dvs_only %>% 
+  group_by(bill_id) %>% 
+  summarize(
+    Added = sum(across(starts_with("added")), na.rm = TRUE),
+    Amended = sum(across(starts_with("amend")), na.rm = TRUE),
+    .groups = 'drop'
+  )
+print(action_summary)
+
+action_summary_amend_free <- amend_free_dvs %>% 
+  group_by(bill_id) %>% 
+  summarize(
+    Added = sum(across(starts_with("added")), na.rm = TRUE),
+    Amended = sum(across(starts_with("amend")), na.rm = TRUE),
+    .groups = 'drop'
+  )
+print(action_summary_amend_free)
+
+action_summary_amend_out <- amended_out_bills %>% 
+  group_by(bill_id) %>% 
+  summarize(
+    Added = sum(across(starts_with("added")), na.rm = TRUE),
+    Amended = sum(across(starts_with("amend")), na.rm = TRUE),
+    .groups = 'drop'
+  )
+print(action_summary_amend_out)
+
+
+action_summary_long <- action_summary %>%
+  pivot_longer(cols = c(Added, Amended), 
+               names_to = "Action", 
+               values_to = "Count")
+
+add_amend_plot <- ggplot(action_summary_long, aes(x = Action, y = Count, color = Action)) +
+  geom_point(size = 2, position = position_jitter(width = 0.1)) + 
+  labs(title = "Distribution of Added and Amended text in bills",
+       x = "Action Type",
+       y = "Count per bill") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 0, hjust = 0.5)) 
+
+add_amend_plot <- ggplot(action_summary_long, aes(x = Action, y = Count, color = Action)) +
+  geom_boxplot(outlier.colour="black", outlier.shape=16,
+             outlier.size=2, notch=FALSE) + 
+  labs(title = "Distribution of Added and Amended text in bills",
+       x = "Action Type",
+       y = "Count per bill") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 0, hjust = 0.5)) 
+
+add_amend_plot <- ggplot(action_summary_long, aes(x = Action, y = Count, color=Action)) +
+  geom_boxplot(outlier.shape = NA, fill = "turquoise", color = "black") +  #remove outliers
+  geom_jitter(width = 0.2, alpha = 0.2, color = "black") +
+  #stat_summary(fun = mean, geom = "point", color = "darkturquoise", size = 3) +
+  labs(title ="Distribution of Added and Amended text in bills" ,
+       x = "Action Type",
+       y = "Count per bill") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+print(add_amend_plot)
+ggsave("output/figures/add_amend.png", plot = add_amend_plot, width = 8, height = 6, units = "in", dpi = 300)
+
+action_summary_amend_free_long <- action_summary_amend_free %>%
+  pivot_longer(cols = c(Added, Amended), 
+               names_to = "Action", 
+               values_to = "Count")
+
+ggplot(action_summary_amend_free_long, aes(x = Action, y = Count, color = Action)) +
+  geom_point(size = 3, position = position_jitter(width = 0.1)) + 
+  labs(title = "Distribution of Added and Amended Actions - Amended out text gone",
+       x = "Action Type",
+       y = "Count of Actions") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 0, hjust = 0.5)) 
+
+action_summary_amend_out_long <- action_summary_amend_out %>%
+  pivot_longer(cols = c(Added, Amended), 
+               names_to = "Action", 
+               values_to = "Count")
+
+ggplot(action_summary_amend_out_long, aes(x = Action, y = Count, color = Action)) +
+  geom_point(size = 3, position = position_jitter(width = 0.1)) + 
+  labs(title = "Distribution of Added and Amended Actions - Amended out text only",
+       x = "Action Type",
+       y = "Count of Actions") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 0, hjust = 0.5)) 
+```
+#Sections of code being added or amended to
+```{r}
+location_code_types <- dvs_only %>% 
+    summarize(
+    "Public utilities" = sum(across(contains("public_utilities")), na.rm = TRUE),
+    "Health & safety" = sum(across(contains("health_safety")), na.rm = TRUE),
+    "Streets & highways" = sum(across(contains("streets_highways")), na.rm = TRUE),
+    "Public resources" = sum(across(contains("public_resources")), na.rm = TRUE),
+    "Government" = sum(across(contains("government")), na.rm = TRUE),
+    "Food & ag" = sum(across(contains("food_agricultural")), na.rm = TRUE),
+    "Education" = sum(across(contains("education")), na.rm = TRUE),
+    "Civil" = sum(across(contains("civil")), na.rm = TRUE),
+    "Water" = sum(across(contains("water")), na.rm = TRUE),
+    "Fish & game" = sum(across(contains("fish_game")), na.rm = TRUE),
+    "Statutes" = sum(across(contains("statutes")), na.rm = TRUE),
+    "Findings" = sum(across(contains("findings")), na.rm = TRUE),
+    .groups = 'drop'
+  )
+location_code_long <- location_code_types %>%
+  pivot_longer(cols = c("Public utilities", "Health & safety", "Streets & highways", "Public resources", "Government", "Food & ag", "Education", "Civil", "Water", "Fish & game", "Statutes", "Findings"), 
+               names_to = "Location", 
+               values_to = "Count") %>% 
+   arrange(desc(Count))
+
+print(location_code_long)
+
+location_code_table <- location_code_long %>%
+  gt() %>%
+  tab_header(
+    title = "Government codes mentioning CES"
+  )
+
+# Print the gt table
+location_code_table
+gtsave(location_code_table, "output/figures/code_table.png")
+
+
+
+location_code_types_amend_free <- amend_free_dvs %>% 
+    summarize(
+    "Public utilities" = sum(across(contains("public_utilities")), na.rm = TRUE),
+    "Health & safety" = sum(across(contains("health_safety")), na.rm = TRUE),
+    "Streets & highways" = sum(across(contains("streets_highways")), na.rm = TRUE),
+    "Public resources" = sum(across(contains("public_resources")), na.rm = TRUE),
+    "Government" = sum(across(contains("government")), na.rm = TRUE),
+    "Food & agriculture" = sum(across(contains("food_agricultural")), na.rm = TRUE),
+    "Education" = sum(across(contains("education")), na.rm = TRUE),
+    "Civil" = sum(across(contains("civil")), na.rm = TRUE),
+    "Water" = sum(across(contains("water")), na.rm = TRUE),
+    "Fish & game" = sum(across(contains("fish_game")), na.rm = TRUE),
+    "Statutes" = sum(across(contains("statutes")), na.rm = TRUE),
+    "Findings" = sum(across(contains("findings")), na.rm = TRUE),
+    .groups = 'drop'
+  )
+location_code_long_amend_free <- location_code_types_amend_free %>%
+  pivot_longer(cols = c(Public_utilities, Health_safety, Streets_highways, Public_resources, Government, Food_ag, Education, Civil, Water, Fish_game, Statutes, Findings), 
+               names_to = "Location", 
+               values_to = "Count") %>% 
+   arrange(desc(Count))
+
+print(location_code_long_amend_free)
+
+
+location_code_types_amend_out <- amended_out_bills %>% 
+    summarize(
+    "Public utilities" = sum(across(contains("public_utilities")), na.rm = TRUE),
+    "Health safety" = sum(across(contains("health_safety")), na.rm = TRUE),
+    "Streets highways" = sum(across(contains("streets_highways")), na.rm = TRUE),
+    "Public resources" = sum(across(contains("public_resources")), na.rm = TRUE),
+    "Government" = sum(across(contains("government")), na.rm = TRUE),
+    "Food ag" = sum(across(contains("food_agricultural")), na.rm = TRUE),
+    "Education" = sum(across(contains("education")), na.rm = TRUE),
+    "Civil" = sum(across(contains("civil")), na.rm = TRUE),
+    "Water" = sum(across(contains("water")), na.rm = TRUE),
+    "Fish game" = sum(across(contains("fish_game")), na.rm = TRUE),
+    "Statutes" = sum(across(contains("statutes")), na.rm = TRUE),
+    "Findings" = sum(across(contains("findings")), na.rm = TRUE),
+    .groups = 'drop'
+  )
+location_code_long_amend_out <- location_code_types_amend_out %>%
+  pivot_longer(cols = c(Public_utilities, Health_safety, Streets_highways, Public_resources, Government, Food_ag, Education, Civil, Water, Fish_game, Statutes, Findings), 
+               names_to = "Location", 
+               values_to = "Count") %>% 
+   arrange(desc(Count))
+
+print(location_code_long_amend_out)
+```
+
+##Employ of HSC vs CES
+```{r}
+summary_employ <- dvs_only %>%
+  select(bill_id, contains("employ")) %>% 
+  mutate(across(starts_with("I"), ~ifelse(. == 1, 1, 0))) %>%  
+  summarise(across(starts_with("I"), sum, na.rm = TRUE)) %>%  
+  pivot_longer(cols = starts_with("I"), names_to = "Employ", values_to = "employ_count") %>% 
+  filter(employ_count > 0) %>%  
+  mutate(Employ = gsub("^I[0-9]+_employ", "", Employ), 
+         Employ = gsub("_", " ", Employ)) %>% 
+  group_by(Employ) %>% 
+  summarise(employ_count = sum(employ_count), .groups = 'drop') %>% 
+  arrange(desc(employ_count))  
+
+print(summary_employ)
+
+summary_employ_amend_free <- amend_free_dvs %>%
+  select(bill_id, contains("employ")) %>% 
+  mutate(across(starts_with("I"), ~ifelse(. == 1, 1, 0))) %>%  
+  summarise(across(starts_with("I"), sum, na.rm = TRUE)) %>%  
+  pivot_longer(cols = starts_with("I"), names_to = "Employ", values_to = "employ_count") %>% 
+  filter(employ_count > 0) %>%  
+  mutate(Employ = gsub("^I[0-9]+_employ", "", Employ), 
+         Employ = gsub("_", " ", Employ)) %>% 
+  group_by(Employ) %>% 
+  summarise(employ_count = sum(employ_count), .groups = 'drop') %>% 
+  arrange(desc(employ_count))  
+
+print(summary_employ_amend_free)
+
+summary_employ_amend_out <- amended_out_bills %>%
+  select(bill_id, contains("employ")) %>% 
+  mutate(across(starts_with("I"), ~ifelse(. == 1, 1, 0))) %>%  
+  summarise(across(starts_with("I"), sum, na.rm = TRUE)) %>%  
+  pivot_longer(cols = starts_with("I"), names_to = "Employ", values_to = "employ_count") %>% 
+  filter(employ_count > 0) %>%  
+  mutate(Employ = gsub("^I[0-9]+_employ", "", Employ), 
+         Employ = gsub("_", " ", Employ)) %>% 
+  group_by(Employ) %>% 
+  summarise(employ_count = sum(employ_count), .groups = 'drop') %>% 
+  arrange(desc(employ_count))  
+
+print(summary_employ_amend_out)
+```
+
+
+```{r}
+use_employ_comparison <- dvs_only %>%
+  select(bill_id, contains("use"), contains("employ")) %>%
+  pivot_longer(cols = contains("use"), names_to = "Use_Type", values_to = "Use_Count") %>%
+  pivot_longer(cols = contains("employ"), names_to = "Employ_Type", values_to = "Employ_Count") %>%
+  filter(Use_Count == 1, Employ_Count == 1) %>%
+  mutate(
+    Use_Type = gsub("^I[0-9]+_use", "", Use_Type),
+    Use_Type = gsub("_", " ", Use_Type),
+    Employ_Type = gsub("^I[0-9]+_employ", "", Employ_Type),
+    Employ_Type = gsub("_", " ", Employ_Type)
+  ) %>%
+  group_by(Use_Type, Employ_Type) %>%
+  summarise(use_count = n(), .groups = 'drop') %>%
+  arrange(Use_Type, desc(use_count))
+
+print(use_employ_comparison)
+
+use_employ_comparison_flipped <- dvs_only %>%
+  select(bill_id, contains("use"), contains("employ")) %>%
+  pivot_longer(cols = contains("use"), names_to = "Use_Type", values_to = "Use_Count") %>%
+  pivot_longer(cols = contains("employ"), names_to = "Employ_Type", values_to = "Employ_Count") %>%
+  filter(Use_Count == 1, Employ_Count == 1) %>%
+  mutate(
+    Use_Type = gsub("^I[0-9]+_use", "", Use_Type),
+    Use_Type = gsub("_", " ", Use_Type),
+    Employ_Type = gsub("^I[0-9]+_employ", "", Employ_Type),
+    Employ_Type = gsub("_", " ", Employ_Type)
+  ) %>%
+  group_by(Employ_Type, Use_Type) %>%  # Flip grouping: Employ_Type comes first
+  summarise(employ_count = n(), .groups = 'drop') %>%  # Rename count to employ_count
+  arrange(Employ_Type, desc(employ_count))  # Sort by Employ_Type and employ_count
+
+# View the flipped data
+head(use_employ_comparison_flipped)
+
+
+use_employ_comparison_amend_free <- amend_free_dvs %>%
+  select(bill_id, contains("use"), contains("employ")) %>%
+  pivot_longer(cols = contains("use"), names_to = "Use_Type", values_to = "Use_Count") %>%
+  pivot_longer(cols = contains("employ"), names_to = "Employ_Type", values_to = "Employ_Count") %>%
+  filter(Use_Count == 1, Employ_Count == 1) %>%
+  mutate(
+    Use_Type = gsub("^I[0-9]+_use", "", Use_Type),
+    Use_Type = gsub("_", " ", Use_Type),
+    Employ_Type = gsub("^I[0-9]+_employ", "", Employ_Type),
+    Employ_Type = gsub("_", " ", Employ_Type)
+  ) %>%
+  group_by(Use_Type, Employ_Type) %>%
+  summarise(use_count = n(), .groups = 'drop') %>%
+  arrange(Use_Type, desc(use_count))
+
+print(use_employ_comparison_amend_free)
+
+use_employ_comparison_amend_out <- amended_out_bills %>%
+  select(bill_id, contains("use"), contains("employ")) %>%
+  pivot_longer(cols = contains("use"), names_to = "Use_Type", values_to = "Use_Count") %>%
+  pivot_longer(cols = contains("employ"), names_to = "Employ_Type", values_to = "Employ_Count") %>%
+  filter(Use_Count == 1, Employ_Count == 1) %>%
+  mutate(
+    Use_Type = gsub("^I[0-9]+_use", "", Use_Type),
+    Use_Type = gsub("_", " ", Use_Type),
+    Employ_Type = gsub("^I[0-9]+_employ", "", Employ_Type),
+    Employ_Type = gsub("_", " ", Employ_Type)
+  ) %>%
+  group_by(Use_Type, Employ_Type) %>%
+  summarise(use_count = n(), .groups = 'drop') %>%
+  arrange(Use_Type, desc(use_count))
+
+print(use_employ_comparison_amend_out)
+
+```
+#Visualizations of use and employ, just trying out some visualizations
+```{r, echo=FALSE}
+use_employ_comparison_plot <- ggplot(use_employ_comparison_flipped, aes(x = Use_Type, y = employ_count, fill = Employ_Type)) +
+  geom_bar(stat = "identity", position = "dodge") +
+  labs(
+    title = "Employ Categories by Use",
+    x = "Use Type",
+    y = "Employ Count",
+    fill = "Employ Type"
+  ) +
+  theme_minimal() +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    legend.position = "bottom"
+  )
+print(use_employ_comparison_plot)
+
+
+
+ggplot(use_employ_comparison_amend_free, aes(x = Employ_Type, y = use_count, fill = Use_Type)) +
+  geom_bar(stat = "identity", position = "dodge") +
+  labs(
+    title = "Use Count by Employ Categories - amend free",
+    x = "Employ Category",
+    y = "Use Count",
+    fill = "Use Type"
+  ) +
+  theme_minimal() +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    legend.position = "bottom"
+  )
+
+print(use_employ_comparison_plot)
+
+
+ggplot(use_employ_comparison_amend_out, aes(x = Employ_Type, y = use_count, fill = Use_Type)) +
+  geom_bar(stat = "identity", position = "dodge") +
+  labs(
+    title = "Use Count by Employ Categories - amended out",
+    x = "Employ Category",
+    y = "Use Count",
+    fill = "Use Type"
+  ) +
+  theme_minimal() +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    legend.position = "bottom"
+  )
+ggsave("output/figures/use_employ_comparison_plot.png", plot = use_employ_comparison_plot, width = 8, height = 6, units = "in", dpi = 300)
+
+```
+Dot plots
+```{r}
+use_employ_comparison_dotplot <- ggplot(use_employ_comparison, aes(x = Employ_Type, y = Use_Type, size = use_count, fill = use_count)) +
+  geom_point(shape = 21, color = "black") +
+  scale_fill_gradient(low = "lightblue", high = "darkblue") +
+  scale_size_continuous(range = c(2, 10)) +
+  labs(
+    title = "Use  Employ Categories",
+    x = "Employ Category",
+    y = "Use Category",
+    size = "Use Count"
+  ) +
+  theme_minimal() +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    legend.position = "right"
+  )
+
+ggplot(use_employ_comparison_amend_free, aes(x = Employ_Type, y = Use_Type, size = use_count, fill = use_count)) +
+  geom_point(shape = 21, color = "black") +
+  scale_fill_gradient(low = "lightblue", high = "darkblue") +
+  scale_size_continuous(range = c(2, 10)) +
+  labs(
+    title = "Use  Employ Categories",
+    x = "Employ Category",
+    y = "Use Category",
+    size = "Use Count"
+  ) +
+  theme_minimal() +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    legend.position = "right"
+  )
+
+ggplot(use_employ_comparison_amend_out, aes(x = Employ_Type, y = Use_Type, size = use_count, fill = use_count)) +
+  geom_point(shape = 21, color = "black") +
+  scale_fill_gradient(low = "lightblue", high = "darkblue") +
+  scale_size_continuous(range = c(2, 10)) +
+  labs(
+    title = "Use  Employ Categories",
+    x = "Employ Category",
+    y = "Use Category",
+    size = "Use Count"
+  ) +
+  theme_minimal() +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    legend.position = "right"
+  )
+ggsave("output/figures/use_employ_comparison_dotplot.png", plot = use_employ_comparison_dotplot, width = 8, height = 6, units = "in", dpi = 300)
+
+
+```
+
+Tables
+```{r}
+
+table_use_employ_comparison_nested <- use_employ_comparison %>%
+  pivot_wider(names_from = Use_Type, values_from = use_count, values_fill = list(use_count = 0))
+
+table_use_employ_comparison_nested <- table_use_employ_comparison_nested %>% 
+  mutate(Total = rowSums(.[, sapply(., is.numeric)]))
+
+totals_row <- data.frame(
+  Employ_Type = "Total",
+  `Advisory role` = sum(table_use_employ_comparison_nested$`Advisory role`, na.rm = TRUE),
+  `Community engagement` = sum(table_use_employ_comparison_nested$`Community engagement`, na.rm = TRUE),
+  `Defining a community` = sum(table_use_employ_comparison_nested$`Defining a community`, na.rm = TRUE),
+  `Funding prioritization` = sum(table_use_employ_comparison_nested$`Funding prioritization`, na.rm = TRUE),
+  `Mitigation` = sum(table_use_employ_comparison_nested$`Mitigation`, na.rm = TRUE),
+  `Program eligibility` = sum(table_use_employ_comparison_nested$`Program eligibility`, na.rm = TRUE),
+  `Program goals` = sum(table_use_employ_comparison_nested$`Program goals`, na.rm = TRUE),
+  `Program prioritization` = sum(table_use_employ_comparison_nested$`Program prioritization`, na.rm = TRUE),
+  `Requires CES to be used in analysis` = sum(table_use_employ_comparison_nested$`Requires CES to be used in analysis`, na.rm = TRUE),
+  `Used as data in support of writing the bill` = sum(table_use_employ_comparison_nested$`Used as data in support of writing the bill`, na.rm = TRUE),  
+  Total = sum(table_use_employ_comparison_nested$Total, na.rm = TRUE)
+)
+
+table_with_totals <- table_use_employ_comparison_nested %>%
+  adorn_totals(where = "row")
+
+gt_table <- table_with_totals %>%
+  gt() %>%
+  tab_options(table.width = pct(100)) %>%
+  tab_header(
+    title = "Use Count by Employ Types"
+  )
+
+gt_table <- table_with_totals %>%
+  select(-"Topic category Land use") %>%
+  gt() %>%
+  tab_options(
+    table.width = pct(100),
+ #   column_labels.font.size = 12,
+   # row.striping.include_table_body = TRUE,
+    column_labels.padding = px(5)
+  ) %>%
+  tab_header(
+    title = "Use Count by Employ Types"
+  )
+
+
+print(gt_table)
+gtsave(gt_table, "output/figures/use_employ_comparison_table.png")
+
+table_use_employ_comparison_amend_free_nested <- use_employ_comparison_amend_free %>%
+  pivot_wider(names_from = Use_Type, values_from = use_count, values_fill = list(use_count = 0))
+
+table_use_employ_comparison_amend_free_nested %>%
+  gt() %>%
+  tab_header(
+    title = "Use Count by Employ Types - Amended free"
+  )
+
+
+
+table_use_employ_comparison_amend_out_nested <- use_employ_comparison_amend_out %>%
+  pivot_wider(names_from = Use_Type, values_from = use_count, values_fill = list(use_count = 0))
+
+table_use_employ_comparison_amend_out_nested %>%
+  gt() %>%
+  tab_header(
+    title = "Use Count by Employ Types - Amended out only"
+  )
+```
+
